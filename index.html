@@ -15,7 +15,6 @@
             // Sobel y
             // kernel = tf.tensor2d([1, 2, 1, 0, 0, 0, -1, -2, -1], [3, 3])
 
-            tf.browser.toPixels(tensor.cast('int32'), canvas)
             convoluted = tensor.reshape([1, ...tensor.shape, 1]).conv2d(kernel.reshape([...kernel.shape, 1, 1]), 1, 'valid').squeeze();
 
             // Normalized to [0, 255] by contrast stretching
