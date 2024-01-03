@@ -18,6 +18,8 @@
             tf.browser.toPixels(tensor.cast('int32'), canvas)
             convoluted = tensor.reshape([1, ...tensor.shape, 1]).conv2d(kernel.reshape([...kernel.shape, 1, 1]), 1, 'valid').squeeze();
 
+            // Normalized to [0, 255] by contrast stretching
+            // https://homepages.inf.ed.ac.uk/rbf/HIPR2/stretch.htm
             c = convoluted.abs().min().dataSync()[0];
             d = convoluted.abs().max().dataSync()[0];
             normalized = convoluted.sub(c).mul(255 / (d - c)).clipByValue(0, 255);
