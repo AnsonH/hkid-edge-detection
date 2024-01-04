@@ -3,6 +3,7 @@
 A demo on HKID card sharpness detection with basic spatial filtering and compute the variances of the convoluted images. Computations conducted by TensorFlow.js.
 
 See:
+
 - https://homepages.inf.ed.ac.uk/rbf/HIPR2/log.htm
 - https://stackoverflow.com/questions/6646371/detect-which-image-is-sharper
 
@@ -17,4 +18,4 @@ npx serve
 ## Result
 
 Left: After applying the filter; Right: Before
-![Sample result](sample-result.png)
+![Sample result](sample.png)
