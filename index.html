@@ -1,63 +1,103 @@
 <head>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
 
-    <script type="text/javascript">
-        const process = (img, canvas) => {
-            raw = tf.browser.fromPixels(img);
-            tensor = tf.mean(raw, 2);  // grayscaling by averaging RGB
+  <script type="text/javascript">
+    // i.e. the box where the user is asked to place the HKID inside
+    const HKID_CARD_FACTOR = {
+      dx: 0.03,
+      dy: 0.185,
+      width: 0.94,
+      height: 0.63,
+    };
 
-            // Laplacian kernel 1
-            kernel = tf.tensor2d([0, 1, 0, 1, -4, 1, 0, 1, 0], [3, 3])
-            // Laplacian kernel 2
-            // kernel = tf.tensor2d([-1, -1, -1, -1, 8, -1, -1, -1, -1], [3, 3])
-            // Sobel x
-            // kernel = tf.tensor2d([1, 0, -1, 2, 0, -2, 1, 0, -1], [3, 3])
-            // Sobel y
-            // kernel = tf.tensor2d([1, 2, 1, 0, 0, 0, -1, -2, -1], [3, 3])
+    const process = (img, canvas) => {
+      const raw = tf.browser.fromPixels(img);
 
-            convoluted = tensor.reshape([1, ...tensor.shape, 1]).conv2d(kernel.reshape([...kernel.shape, 1, 1]), 1, 'valid').squeeze();
+      let tensor = tf.mean(raw, 2); // Grayscale (by averaging RGB channels)
 
-            // Normalized to [0, 255] by contrast stretching
-            // https://homepages.inf.ed.ac.uk/rbf/HIPR2/stretch.htm
-            c = convoluted.abs().min().dataSync()[0];
-            d = convoluted.abs().max().dataSync()[0];
-            normalized = convoluted.sub(c).mul(255 / (d - c)).clipByValue(0, 255);
+      /**
+       * It has shape `[batch, height, width, inChannels]`, where
+       * - `batch` = no. of images to be processed once
+       * - `height`/`width` = image height/width in px
+       * - `inChannels` = no. of color channels (= 1 due to grayscale)
+       */
+      let imageTensor = tensor.reshape([1, ...tensor.shape, 1]);
 
-            tf.browser.toPixels(normalized.cast('int32'), canvas)
-            variance = tf.moments(convoluted).variance;
+      // Crop the bounding box of the HKID card to remove background noise
+      imageTensor = tf.image.cropAndResize(
+        imageTensor,
+        [
+          [
+            HKID_CARD_FACTOR.dy,
+            HKID_CARD_FACTOR.dx,
+            HKID_CARD_FACTOR.dy + HKID_CARD_FACTOR.height,
+            HKID_CARD_FACTOR.dx + HKID_CARD_FACTOR.width,
+          ],
+        ],
+        [0],
+        [
+          Math.round(tensor.shape[0] * HKID_CARD_FACTOR.height),
+          Math.round(tensor.shape[1] * HKID_CARD_FACTOR.width),
+        ] // Crop size
+      );
 
-            p = document.createElement('p');
-            p.innerHTML = `Variance: ${variance.dataSync()[0]}`;
-            img.parentNode.insertBefore(p, img);
-        }
+      // Laplacian kernel (https://homepages.inf.ed.ac.uk/rbf/HIPR2/log.htm)
+      const kernel = tf.tensor2d([
+        [0, 1, 0],
+        [1, -4, 1],
+        [0, 1, 0],
+      ]);
 
-        const ids = [
-            'blur0',
-            'blur1',
-            'blur2',
-            'blur3',
-            'blur4',
-        ];
+      const convoluted = imageTensor
+        // First argument has shape `[filterHeight, filterWidth, inDepth, outDepth]`
+        .conv2d(kernel.reshape([...kernel.shape, 1, 1]), 1, "valid")
+        .squeeze();
 
-        window.onload = () => {
-            ids.forEach(id => {
-                canvas = document.createElement('canvas');
-                image = document.getElementById(id);
-                document.getElementById('container').insertBefore(canvas, image);
-                process(image, canvas);
-            })
-        }
-    </script>
+      // Normalized to [0, 255] by contrast stretching
+      // https://homepages.inf.ed.ac.uk/rbf/HIPR2/stretch.htm
+      const c = convoluted.abs().min().dataSync()[0];
+      const d = convoluted.abs().max().dataSync()[0];
+      const normalized = convoluted
+        .sub(c)
+        .mul(255 / (d - c))
+        .clipByValue(0, 255);
+
+      tf.browser.toPixels(normalized.cast("int32"), canvas);
+      const variance = tf.moments(convoluted).variance;
+
+      const p = document.createElement("p");
+      p.innerHTML = `Variance: ${variance.dataSync()[0]}`;
+      img.parentNode.insertBefore(p, img);
+    };
+
+    window.onload = () => {
+      document.querySelectorAll("#container > img").forEach((imageEl) => {
+        canvas = document.createElement("canvas");
+        document.getElementById("container").insertBefore(canvas, imageEl);
+        process(imageEl, canvas);
+      });
+    };
+  </script>
+
+  <style>
+    #container {
+      display: grid;
+      grid-template-columns: auto auto auto;
+      justify-content: flex-start;
+      grid-gap: 16px;
+    }
+
+    #container img {
+      max-width: 500px;
+    }
+  </style>
 </head>
 
 <body>
-    <div id="container"
-        style="display: grid; grid-template-columns: auto auto auto; justify-content: flex-start; grid-gap: 16px">
-        <!-- <image id="blur0" src="/fake_hkid_old.jpg"></image> -->
-        <image id="blur0" src="/fake_hkid_blur_0.jpg"></image>
-        <image id="blur1" src="/fake_hkid_blur_1.jpg"></image>
-        <image id="blur2" src="/fake_hkid_blur_2.jpg"></image>
-        <image id="blur3" src="/fake_hkid_blur_3.jpg"></image>
-        <image id="blur4" src="/fake_hkid_blur_4.jpg"></image>
-    </div>
+  <div id="container">
+    <image src="images/clear_hkid_on_phone.jpeg"></image>
+    <image src="images/acceptable_hkid_on_phone.jpg"></image>
+    <image src="images/blur_hkid_on_phone_1.jpeg"></image>
+    <image src="images/blur_hkid_on_phone_2.jpeg"></image>
+  </div>
 </body>
