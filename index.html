@@ -1,19 +1,84 @@
 <head>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+  <script src="https://cdn.jsdelivr.net/npm/lodash"></script>
 
   <script type="text/javascript">
-    // i.e. the box where the user is asked to place the HKID inside
-    const HKID_CARD_FACTOR = {
-      dx: 0.03,
-      dy: 0.185,
-      width: 0.94,
-      height: 0.63,
+    const HKID_CARD_SHARPNESS_FACTOR = {
+      dx: 0.1,
+      dy: 0.235,
+      width: 0.8,
+      height: 0.53,
+    };
+
+    const LAPLACIAN_KERNEL = tf.tensor2d([
+      [0, 1, 0],
+      [1, -4, 1],
+      [0, 1, 0],
+    ]);
+
+    const LAPLACIAN_FILTER = tf.reshape(LAPLACIAN_KERNEL, [
+      ...LAPLACIAN_KERNEL.shape,
+      1, // i.e. inputs a grayscale image
+      1,
+    ]);
+
+    /**
+     * Real: 20 (7 clear; 6 slightly blur but legible; 7 very blurry)
+     * Accuracy: 80% (4 false +ve on slightly blur)
+     */
+    const THRESHOLD = 50;
+
+    let totalProcessTimeMs = 0;
+    let processedFiles = 0;
+
+    const cropHkidImage = (image) => {
+      const [, imageHeight, imageWidth] = image.shape;
+      const hkidFactorHeight = HKID_CARD_SHARPNESS_FACTOR.height;
+      const hkidFactorWidth = HKID_CARD_SHARPNESS_FACTOR.width;
+
+      const croppedImageSize = [
+        Math.round(imageHeight * hkidFactorHeight),
+        Math.round(imageWidth * hkidFactorWidth),
+      ];
+
+      const croppedImage = tf.image.cropAndResize(
+        image,
+        [
+          [
+            HKID_CARD_SHARPNESS_FACTOR.dy,
+            HKID_CARD_SHARPNESS_FACTOR.dx,
+            HKID_CARD_SHARPNESS_FACTOR.dy + hkidFactorHeight,
+            HKID_CARD_SHARPNESS_FACTOR.dx + hkidFactorWidth,
+          ],
+        ],
+        [0],
+        croppedImageSize
+      );
+      return croppedImage;
+    };
+
+    const grayscaleAndCropHkidImage = _.flow([
+      tf.browser.fromPixels,
+      tf.image.rgbToGrayscale,
+      (tensor) => tf.reshape(tensor, [1, ...tensor.shape]),
+      cropHkidImage,
+    ]);
+
+    // Normalized to [0, 255] by contrast stretching
+    // https://homepages.inf.ed.ac.uk/rbf/HIPR2/stretch.htm
+    const normalizeGrayscaleImage = (image) => {
+      const c = tf.min(tf.abs(image)).dataSync()[0];
+      const d = tf.max(tf.abs(image)).dataSync()[0];
+      const normalized = tf.clipByValue(
+        tf.mul(tf.sub(image, c), 255 / (d - c)),
+        0,
+        255
+      );
+      return normalized;
     };
 
     const process = (img, canvas) => {
-      const raw = tf.browser.fromPixels(img);
-
-      let tensor = tf.mean(raw, 2); // Grayscale (by averaging RGB channels)
+      const t1 = performance.now();
 
       /**
        * It has shape `[batch, height, width, inChannels]`, where
@@ -21,53 +86,26 @@
        * - `height`/`width` = image height/width in px
        * - `inChannels` = no. of color channels (= 1 due to grayscale)
        */
-      let imageTensor = tensor.reshape([1, ...tensor.shape, 1]);
+      const image = grayscaleAndCropHkidImage(img);
 
-      // Crop the bounding box of the HKID card to remove background noise
-      imageTensor = tf.image.cropAndResize(
-        imageTensor,
-        [
-          [
-            HKID_CARD_FACTOR.dy,
-            HKID_CARD_FACTOR.dx,
-            HKID_CARD_FACTOR.dy + HKID_CARD_FACTOR.height,
-            HKID_CARD_FACTOR.dx + HKID_CARD_FACTOR.width,
-          ],
-        ],
-        [0],
-        [
-          Math.round(tensor.shape[0] * HKID_CARD_FACTOR.height),
-          Math.round(tensor.shape[1] * HKID_CARD_FACTOR.width),
-        ] // Crop size
-      );
+      const convolutionOutput = tf.conv2d(image, LAPLACIAN_FILTER, 1, "valid");
+      const convolutedImage = tf.squeeze(convolutionOutput);
 
-      // Laplacian kernel (https://homepages.inf.ed.ac.uk/rbf/HIPR2/log.htm)
-      const kernel = tf.tensor2d([
-        [0, 1, 0],
-        [1, -4, 1],
-        [0, 1, 0],
-      ]);
-
-      const convoluted = imageTensor
-        // First argument has shape `[filterHeight, filterWidth, inDepth, outDepth]`
-        .conv2d(kernel.reshape([...kernel.shape, 1, 1]), 1, "valid")
-        .squeeze();
-
-      // Normalized to [0, 255] by contrast stretching
-      // https://homepages.inf.ed.ac.uk/rbf/HIPR2/stretch.htm
-      const c = convoluted.abs().min().dataSync()[0];
-      const d = convoluted.abs().max().dataSync()[0];
-      const normalized = convoluted
-        .sub(c)
-        .mul(255 / (d - c))
-        .clipByValue(0, 255);
+      const normalized = normalizeGrayscaleImage(convolutedImage);
 
       tf.browser.toPixels(normalized.cast("int32"), canvas);
-      const variance = tf.moments(convoluted).variance;
+      const variance = tf.moments(convolutedImage).variance.dataSync()[0];
 
       const p = document.createElement("p");
-      p.innerHTML = `Variance: ${variance.dataSync()[0]}`;
+      p.innerHTML = `Variance: ${variance} | Too Blurry: ${
+        variance < THRESHOLD ? "Yes" : "No"
+      }`;
       img.parentNode.insertBefore(p, img);
+
+      const t2 = performance.now();
+      console.log(`Took ${t2 - t1} ms`);
+      totalProcessTimeMs += t2 - t1;
+      ++processedFiles;
     };
 
     window.onload = () => {
@@ -76,6 +114,10 @@
         document.getElementById("container").insertBefore(canvas, imageEl);
         process(imageEl, canvas);
       });
+
+      console.log("=========================================");
+      console.log(`Total took ${totalProcessTimeMs} ms`);
+      console.log(`Average took ${totalProcessTimeMs / processedFiles} ms`);
     };
   </script>
 
@@ -87,7 +129,7 @@
       grid-gap: 16px;
     }
 
-    #container img {
+    canvas {
       max-width: 500px;
     }
   </style>
@@ -96,8 +138,8 @@
 <body>
   <div id="container">
     <image src="images/clear_hkid_on_phone.jpeg"></image>
-    <image src="images/acceptable_hkid_on_phone.jpg"></image>
-    <image src="images/blur_hkid_on_phone_1.jpeg"></image>
-    <image src="images/blur_hkid_on_phone_2.jpeg"></image>
+    <image src="images/acceptable_hkid_on_phone.jpeg"></image>
+    <image src="images/blur_hkid_on_phone.jpg"></image>
+
   </div>
 </body>
